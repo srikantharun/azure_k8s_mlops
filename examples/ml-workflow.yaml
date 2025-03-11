@@ -1,0 +1,160 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: ml-pipeline-
+spec:
+  entrypoint: ml-pipeline
+  # Define input parameters if needed
+  arguments:
+    parameters:
+    - name: dataset-url
+      value: "${BLOB_URL}"
+    - name: dataset-name
+      value: "${BLOB_NAME}"
+    - name: model-output-container
+      value: "models"
+
+  # Define global volumes for data sharing between steps
+  volumes:
+  - name: workdir
+    emptyDir: {}
+  - name: azure-credentials
+    secret:
+      secretName: azure-storage-credentials
+
+  # Define the main pipeline template
+  templates:
+  - name: ml-pipeline
+    steps:
+    - - name: preprocess
+        template: preprocess
+        arguments:
+          parameters:
+          - name: dataset-url
+            value: "{{workflow.parameters.dataset-url}}"
+          - name: dataset-name
+            value: "{{workflow.parameters.dataset-name}}"
+    
+    - - name: train
+        template: train
+        arguments:
+          parameters:
+          - name: dataset-name
+            value: "{{workflow.parameters.dataset-name}}"
+    
+    - - name: evaluate
+        template: evaluate
+        arguments:
+          parameters:
+          - name: dataset-name
+            value: "{{workflow.parameters.dataset-name}}"
+    
+    - - name: deploy
+        template: deploy
+        arguments:
+          parameters:
+          - name: model-name
+            value: "model-{{workflow.parameters.dataset-name}}"
+          - name: output-container
+            value: "{{workflow.parameters.model-output-container}}"
+
+  # Preprocessing step
+  - name: preprocess
+    inputs:
+      parameters:
+      - name: dataset-url
+      - name: dataset-name
+    container:
+      image: myregistry/ml-preprocessor:latest
+      command: [python, /app/preprocess.py]
+      args:
+      - "--input-url"
+      - "{{inputs.parameters.dataset-url}}"
+      - "--output-path"
+      - "/data/processed-{{inputs.parameters.dataset-name}}.npz"
+      volumeMounts:
+      - name: workdir
+        mountPath: /data
+      - name: azure-credentials
+        mountPath: /credentials
+        readOnly: true
+      env:
+      - name: AZURE_STORAGE_CONNECTION_STRING
+        valueFrom:
+          secretKeyRef:
+            name: azure-storage-credentials
+            key: connectionString
+
+  # Training step
+  - name: train
+    inputs:
+      parameters:
+      - name: dataset-name
+    container:
+      image: myregistry/ml-trainer:latest
+      command: [python, /app/train.py]
+      args:
+      - "--input-path"
+      - "/data/processed-{{inputs.parameters.dataset-name}}.npz"
+      - "--model-path"
+      - "/data/model-{{inputs.parameters.dataset-name}}.h5"
+      - "--params-path"
+      - "/data/params-{{inputs.parameters.dataset-name}}.json"
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+      volumeMounts:
+      - name: workdir
+        mountPath: /data
+
+  # Evaluation step
+  - name: evaluate
+    inputs:
+      parameters:
+      - name: dataset-name
+    container:
+      image: myregistry/ml-evaluator:latest
+      command: [python, /app/evaluate.py]
+      args:
+      - "--model-path"
+      - "/data/model-{{inputs.parameters.dataset-name}}.h5"
+      - "--test-data"
+      - "/data/processed-{{inputs.parameters.dataset-name}}.npz"
+      - "--metrics-path"
+      - "/data/metrics-{{inputs.parameters.dataset-name}}.json"
+      volumeMounts:
+      - name: workdir
+        mountPath: /data
+
+  # Deployment/Upload step (Quantizes and uploads the model)
+  - name: deploy
+    inputs:
+      parameters:
+      - name: model-name
+      - name: output-container
+    container:
+      image: myregistry/ml-deployer:latest
+      command: [python, /app/deploy.py]
+      args:
+      - "--model-path"
+      - "/data/model-{{inputs.parameters.model-name}}.h5"
+      - "--params-path"
+      - "/data/params-{{inputs.parameters.model-name}}.json"
+      - "--metrics-path"
+      - "/data/metrics-{{inputs.parameters.model-name}}.json"
+      - "--output-container"
+      - "{{inputs.parameters.output-container}}"
+      - "--quantize"
+      - "int8"
+      volumeMounts:
+      - name: workdir
+        mountPath: /data
+      - name: azure-credentials
+        mountPath: /credentials
+        readOnly: true
+      env:
+      - name: AZURE_STORAGE_CONNECTION_STRING
+        valueFrom:
+          secretKeyRef:
+            name: azure-storage-credentials
+            key: connectionString

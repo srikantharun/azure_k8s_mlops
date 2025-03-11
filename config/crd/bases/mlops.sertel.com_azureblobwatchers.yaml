@@ -1,0 +1,114 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: azureblobwatchers.mlops.sertel.com
+spec:
+  group: mlops.sertel.com
+  names:
+    kind: AzureBlobWatcher
+    listKind: AzureBlobWatcherList
+    plural: azureblobwatchers
+    singular: azureblobwatcher
+    shortNames:
+      - abw
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - storageAccount
+                - containerName
+                - credentialsSecret
+                - jobTemplate
+              properties:
+                storageAccount:
+                  type: string
+                  description: "Azure Storage Account name"
+                containerName:
+                  type: string
+                  description: "Azure Blob Container name"
+                credentialsSecret:
+                  type: string
+                  description: "Kubernetes Secret containing Azure credentials"
+                blobPrefix:
+                  type: string
+                  description: "Optional prefix to filter blobs"
+                blobPattern:
+                  type: string
+                  description: "Optional regex pattern to filter blobs"
+                pollingIntervalSeconds:
+                  type: integer
+                  default: 60
+                  description: "Interval in seconds between Azure Storage polls"
+                jobTemplate:
+                  type: object
+                  required:
+                    - kind
+                    - template
+                  properties:
+                    kind:
+                      type: string
+                      enum: ["Job", "Workflow"]
+                      description: "Kubernetes resource kind to create"
+                    template:
+                      type: string
+                      description: "Template for the Kubernetes resource to create"
+            status:
+              type: object
+              properties:
+                lastChecked:
+                  type: string
+                  format: date-time
+                lastDetectedBlobs:
+                  type: array
+                  items:
+                    type: string
+                triggeredJobs:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      blobName:
+                        type: string
+                      jobName:
+                        type: string
+                      creationTime:
+                        type: string
+                        format: date-time
+                      status:
+                        type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Storage
+          type: string
+          jsonPath: .spec.storageAccount
+        - name: Container
+          type: string
+          jsonPath: .spec.containerName
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
